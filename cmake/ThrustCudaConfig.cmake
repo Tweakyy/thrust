@@ -36,6 +36,35 @@ list(LENGTH THRUST_KNOWN_COMPUTE_ARCHS max_idx)
 math(EXPR max_idx "${max_idx} - 1")
 list(GET THRUST_KNOWN_COMPUTE_ARCHS ${max_idx} highest_arch)
 
+option(THRUST_AUTO_DETECT_COMPUTE_ARCHS
+  "If ON, CUDA architectures for all GPUs in the current system are enabled and all other CUDA architectures are disabled."
+  OFF
+)
+
+if (THRUST_AUTO_DETECT_COMPUTE_ARCHS)
+  set(detect_compute_archs_source ${Thrust_SOURCE_DIR}/cmake/detect_compute_archs.cu)
+  set(detect_compute_archs_exe ${PROJECT_BINARY_DIR}/detect_compute_archs)
+  set(detect_compute_archs_error_log ${PROJECT_BINARY_DIR}/detect_compute_archs.stderr.log)
+  execute_process(
+    COMMAND ${CMAKE_CUDA_COMPILER}
+      -std=c++11
+      -o ${detect_compute_archs_exe}
+      --run
+      ${detect_compute_archs_source}
+    OUTPUT_VARIABLE detected_archs
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_FILE ${detect_compute_archs_error_log})
+  if ("ALL" STREQUAL "${detected_archs}")
+    set(detected_message " none (building for all archs)")
+    set(detected_archs ${THRUST_KNOWN_COMPUTE_ARCHS})
+  else()
+    foreach (arch IN LISTS detected_archs)
+      string(APPEND detected_message " sm_${arch}")
+    endforeach()
+  endif()
+  message(STATUS "Thrust: Automatically detected CUDA architectures:${detected_message}")
+endif()
+
 set(option_init OFF)
 if ("NVCXX" STREQUAL "${CMAKE_CUDA_COMPILER_ID}")
   set(option_init ON)
@@ -46,15 +75,21 @@ option(THRUST_DISABLE_ARCH_BY_DEFAULT
 )
 
 set(option_init ON)
-if (THRUST_DISABLE_ARCH_BY_DEFAULT)
+if (THRUST_DISABLE_ARCH_BY_DEFAULT OR THRUST_AUTO_DETECT_COMPUTE_ARCHS)
   set(option_init OFF)
 endif()
 
 set(num_archs_enabled 0)
 foreach (arch IN LISTS THRUST_KNOWN_COMPUTE_ARCHS)
+  set(this_option_init ${option_init})
+
+  if (${arch} IN_LIST detected_archs)
+    set(this_option_init ON)
+  endif()
+
   option(THRUST_ENABLE_COMPUTE_${arch}
     "Enable code generation for tests for sm_${arch}"
-    ${option_init}
+    ${this_option_init}
   )
 
   if (NOT THRUST_ENABLE_COMPUTE_${arch})
@@ -75,7 +110,7 @@ foreach (arch IN LISTS THRUST_KNOWN_COMPUTE_ARCHS)
     set(arch_flag "-gencode arch=compute_${arch},code=sm_${arch}")
   endif()
 
-  string(APPEND COMPUTE_MESSAGE " sm_${arch}")
+  string(APPEND compute_message " sm_${arch}")
   string(APPEND THRUST_CUDA_FLAGS_NO_RDC " ${arch_flag}")
   if (NOT arch IN_LIST no_rdc_archs)
     string(APPEND THRUST_CUDA_FLAGS_RDC " ${arch_flag}")
@@ -91,11 +126,11 @@ if (NOT "NVCXX" STREQUAL "${CMAKE_CUDA_COMPILER_ID}")
     string(APPEND THRUST_CUDA_FLAGS_BASE
       " -gencode arch=compute_${highest_arch},code=compute_${highest_arch}"
     )
-    string(APPEND COMPUTE_MESSAGE " compute_${highest_arch}")
+    string(APPEND compute_message " compute_${highest_arch}")
   endif()
 endif()
 
-message(STATUS "Thrust: Enabled CUDA architectures:${COMPUTE_MESSAGE}")
+message(STATUS "Thrust: Enabled CUDA architectures:${compute_message}")
 
 # RDC is off by default in NVCC and on by default in NVC++. Turning off RDC
 # isn't currently supported by NVC++. So, we default to RDC off for NVCC and
